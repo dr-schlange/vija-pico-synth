@@ -12,7 +12,7 @@ in semi-modular format.
 * **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
 * **4-Voice Polyphony:** Per-sample AR (Attack-Release) envelopes.
 * **OLED Interface:** Real-time feedback with a menu system and a oscilloscope.
-* **Intelligent Modulation:** CV input and modulation controls using midi.
+* **Modulation:** 2 pots, CV input and midi cc.
 * **Internal Filter:** Integrated State Variable Filter (SVF) with Low-Pass and Resonance.
 * **Dual MIDI:** Support for both USB MIDI and classic UART MIDI.
 
@@ -95,7 +95,7 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 
 - Adafruit SSD1306 or SH110X (check code branch)
 
-- LittleFS  & ArduinoJson for saving settings
+- LittleFS & ArduinoJson for saving settings
 
 3.  **Compilation Settings:**
    
@@ -113,7 +113,7 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 
 ## ⚡ Schematic & Wiring
 
-For this project I use RP2040 Zero model, so adjust GPIO numbers to your board.
+For this project I use RP2040 Zero model, so adjust GPIO numbers for your board.
 
 ### 1. Audio Output (I2S DAC)
 Connect your **PCM5102** or similar I2S DAC:
