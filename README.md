@@ -142,7 +142,7 @@ Connect the outer pins to 3.3V and GND, and the center wiper to:
 * **Pot 4 (CV2)** -> GP29 
 
 ### 4. MIDI Input (UART)
-Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13 (Pin 17)**.
+Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
 
 ---
 
