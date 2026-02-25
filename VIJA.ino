@@ -47,9 +47,21 @@
 #include <BRAIDS.h>
 #include <pico/stdlib.h>
 #include <Wire.h>
-#include <Adafruit_SSD1306.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+
+#define SSD1306 1  //ssd1306 display
+// #define SH110X 1// sh110x display
+
+#if SSD1306
+#include <Adafruit_SSD1306.h>
+#define SCREEN_WHITE SSD1306_WHITE
+#endif
+
+#if SH110X
+#include <Adafruit_SH110X.h>
+#define SCREEN_WHITE SH110X_WHITE
+#endif
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
@@ -243,7 +255,15 @@ Adafruit_USBD_MIDI usb_midi;
 SynthSettings lastSavedSettings;  // Settings copy for comparison of changes
 
 #if USE_SCREEN
+
+#if SSD1306
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
+#endif
+
+#if SH110X
+Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
+#endif
+
 #endif
 
 const char *const engine_names[] = {
@@ -314,13 +334,13 @@ void __not_in_flash_func(updateAudio)() {
     fm_target = fm_mod;
   }
 
-  float timb_target = midi_mod ? timb_mod_midi
-                      : cv_mod1  ? timb_mod_cv
-                                         : 0.0f;
+  float timb_target = midi_mod  ? timb_mod_midi
+                      : cv_mod1 ? timb_mod_cv
+                                : 0.0f;
 
-  float color_target = midi_mod ? color_mod_midi
-                       : cv_mod1  ? color_mod_cv
-                                          : 0.0f;
+  float color_target = midi_mod  ? color_mod_midi
+                       : cv_mod1 ? color_mod_cv
+                                 : 0.0f;
 
   auto apply_stable_slew = [](float &current, float target, float coefficient) {
     float diff = target - current;
@@ -492,7 +512,10 @@ void drawEngineUI() {
     case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
     case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
     case MIDI_MOD: sprintf(menuBuf, "MIDI:%s", midi_mod ? "ON" : "OFF"); break;
-    case MIDI_CH: sprintf(menuBuf, "MIDICH:%d", midi_ch); engine_updated = true; break;
+    case MIDI_CH:
+      sprintf(menuBuf, "MIDICH:%d", midi_ch);
+      engine_updated = true;
+      break;
     case SCOPE_TOGGLE: sprintf(menuBuf, "SCOPE:%s", oscilloscope_enabled ? "ON" : "OFF"); break;
     default:
       if (timbre_locked && color_locked) strcpy(menuBuf, "ALL-MIDI");
@@ -864,9 +887,9 @@ void setup() {
 
 void loop() {
   if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
-    updateAudio();
+  updateAudio();
   }
-    handleMIDI();
+  handleMIDI();
 }
 
 
@@ -878,7 +901,12 @@ void setup1() {
   pinMode(ENCODER_SW, INPUT_PULLUP);
 
 #if USE_SCREEN
+#if SSD1306
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+#endif
+#ifdef SH110X
+  display.begin(0x3C, true);
+#endif
   drawSplash();
   delay(4000);
   display.clearDisplay();
@@ -1130,25 +1158,25 @@ void loop1() {
             midi_mod = false;
             cv_mod1 = false;
             cv_mod2 = false;
-            
+
             break;
-         case MIDI_MOD:  
+          case MIDI_MOD:
             midi_mod = !midi_mod;
 
             if (midi_mod) {
-            cv_mod1 = false;
-            cv_mod2 = false;   
+              cv_mod1 = false;
+              cv_mod2 = false;
             }
-          break;
-          case CV_MOD1: 
+            break;
+          case CV_MOD1:
             cv_mod1 = !cv_mod1;
             filter_enabled = false;
-            cv_mod2   = false;   
+            cv_mod2 = false;
             if (cv_mod1) midi_mod = false;
             break;
           case CV_MOD2:
             cv_mod2 = !cv_mod2;
-            cv_mod1 = false;   
+            cv_mod1 = false;
             filter_enabled = false;
             if (cv_mod2) midi_mod = false;
             break;
