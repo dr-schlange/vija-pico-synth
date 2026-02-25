@@ -866,7 +866,7 @@ void loop() {
   if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
     updateAudio();
   }
-  yield();
+    handleMIDI();
 }
 
 
@@ -888,7 +888,6 @@ void setup1() {
 
 
 void loop1() {
-  handleMIDI();
   saveButton();
 #if USE_SCREEN
   checkSavedFeedback();
