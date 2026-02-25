@@ -114,22 +114,6 @@ enum EncoderState { ENGINE_SELECT,
                     MIDI_CH,
                     SCOPE_TOGGLE };
 
-
-struct AudioParams {
-  float fm_mod;
-  float timb_mod_midi;
-  float color_mod_midi;
-  float timbre_in;
-  float color_in;
-  int engine_idx;
-};
-
-// target values updated by MIDI/UI
-volatile AudioParams params_target;
-
-// snapshot used by audio thread
-AudioParams params_audio;
-
 volatile uint8_t midi_ch = 1;
 volatile int engine_idx = 1;
 static int last_engine_idx = -1;
