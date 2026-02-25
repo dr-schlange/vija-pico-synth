@@ -24,11 +24,11 @@
 
   Compilation:
 
-  RP2040: - Optimize: Fast (-Ofast)
+  RP2040: - Optimize: Optimize Even More (-O3)
           - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
           - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
   RP2350:
-         - Optimize: Fast (-Ofast)
+         - Optimize: Optimize Even More (-O3)
          - Sample rate: 48000
   
   Software:
