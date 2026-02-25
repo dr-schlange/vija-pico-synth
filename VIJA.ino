@@ -1,6 +1,8 @@
 
 /*
-  VIJA (v1.0.1) 
+  VIJA (v1.0.2) 
+
+  Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
   
   Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
   in semi-modular format.
@@ -21,23 +23,21 @@
 
   Compilation:
 
-  RP2040: - Optimize: Fast (-Ofast)
+  RP2040: - Optimize: Optimize Even More (-O3)
           - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
           - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
   RP2350:
-         - Optimize: Fast (-Ofast)
+         - Optimize: Optimize Even More (-O3)
          - Sample rate: 48000
   
   Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
 
-  License:
-  Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
-
   stmlib, braids source libs
   Copyright (c) 2020 (emilie.o.gillet@gmail.com)
   MIT License
+  
 */
 
 #include <Arduino.h>
@@ -47,9 +47,21 @@
 #include <BRAIDS.h>
 #include <pico/stdlib.h>
 #include <Wire.h>
-#include <Adafruit_SSD1306.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+
+#define SSD1306 1  //ssd1306 display
+// #define SH110X 1// sh110x display
+
+#if SSD1306
+#include <Adafruit_SSD1306.h>
+#define SCREEN_WHITE SSD1306_WHITE
+#endif
+
+#if SH110X
+#include <Adafruit_SH110X.h>
+#define SCREEN_WHITE SH110X_WHITE
+#endif
 
 #define I2S_DATA_PIN 9
 #define I2S_BCLK_PIN 10
@@ -108,8 +120,9 @@ enum EncoderState { ENGINE_SELECT,
                     ATTACK_ADJUST,
                     RELEASE_ADJUST,
                     FILTER_TOGGLE,
-                    MOD_TOGGLE,
-                    CV_MOD_TOGGLE,
+                    MIDI_MOD,
+                    CV_MOD1,
+                    CV_MOD2,
                     MIDI_CH,
                     SCOPE_TOGGLE };
 
@@ -137,8 +150,9 @@ volatile bool env_params_changed = true;
 volatile unsigned long last_param_change = 0;
 unsigned long last_midi_lock_time = 0;
 
-volatile bool modulation_enabled = false;
-volatile bool mod_cv_enabled = false;
+volatile bool midi_mod = false;
+volatile bool cv_mod1 = false;
+volatile bool cv_mod2 = false;
 
 volatile float timbre_midi_target = 0.0f;
 volatile float color_midi_target = 0.0f;
@@ -197,8 +211,9 @@ struct SynthSettings {
   float env_release_s;
   int engine_idx;
   bool filter_enabled;
-  bool modulation_enabled;
-  bool mod_cv_enabled;
+  bool midi_mod;
+  bool cv_mod1;
+  bool cv_mod2;
   float timbre_in;
   float color_in;
   float timb_mod_cv;
@@ -215,8 +230,9 @@ SynthSettings settings = {
   .env_release_s = 0.01f,
   .engine_idx = 1,
   .filter_enabled = true,
-  .modulation_enabled = false,
-  .mod_cv_enabled = false,
+  .midi_mod = false,
+  .cv_mod1 = false,
+  .cv_mod2 = false,
   .timbre_in = 0.4f,
   .color_in = 0.3f,
   .timb_mod_cv = 0.0f,
@@ -239,7 +255,15 @@ Adafruit_USBD_MIDI usb_midi;
 SynthSettings lastSavedSettings;  // Settings copy for comparison of changes
 
 #if USE_SCREEN
+
+#if SSD1306
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
+#endif
+
+#if SH110X
+Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
+#endif
+
 #endif
 
 const char *const engine_names[] = {
@@ -300,9 +324,9 @@ void __not_in_flash_func(updateAudio)() {
   static float timb_slew = 0.0f;
   static float color_slew = 0.0f;
 
-  if (modulation_enabled) {
+  if (midi_mod) {
     fm_target = fm_mod;
-  } else if (mod_cv_enabled) {
+  } else if (cv_mod1) {
     fm_target = 0.0f;
   } else if (filter_enabled) {
     fm_target = 0.0f;
@@ -310,13 +334,13 @@ void __not_in_flash_func(updateAudio)() {
     fm_target = fm_mod;
   }
 
-  float timb_target = modulation_enabled ? timb_mod_midi
-                      : mod_cv_enabled   ? timb_mod_cv
-                                         : 0.0f;
+  float timb_target = midi_mod  ? timb_mod_midi
+                      : cv_mod1 ? timb_mod_cv
+                                : 0.0f;
 
-  float color_target = modulation_enabled ? color_mod_midi
-                       : mod_cv_enabled   ? color_mod_cv
-                                          : 0.0f;
+  float color_target = midi_mod  ? color_mod_midi
+                       : cv_mod1 ? color_mod_cv
+                                 : 0.0f;
 
   auto apply_stable_slew = [](float &current, float target, float coefficient) {
     float diff = target - current;
@@ -485,9 +509,13 @@ void drawEngineUI() {
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
     case FILTER_TOGGLE: sprintf(menuBuf, "FLT:%s", filter_enabled ? "ON" : "OFF"); break;
-    case CV_MOD_TOGGLE: sprintf(menuBuf, "CVMOD:%s", mod_cv_enabled ? "ON" : "OFF"); break;
-    case MOD_TOGGLE: sprintf(menuBuf, "MIDI:%s", modulation_enabled ? "ON" : "OFF"); break;
-    case MIDI_CH: sprintf(menuBuf, "MIDICH:%d", midi_ch); break;
+    case CV_MOD1: sprintf(menuBuf, "CV1:%s", cv_mod1 ? "ON" : "OFF"); break;
+    case CV_MOD2: sprintf(menuBuf, "CV2:%s", cv_mod2 ? "ON" : "OFF"); break;
+    case MIDI_MOD: sprintf(menuBuf, "MIDI:%s", midi_mod ? "ON" : "OFF"); break;
+    case MIDI_CH:
+      sprintf(menuBuf, "MIDICH:%d", midi_ch);
+      engine_updated = true;
+      break;
     case SCOPE_TOGGLE: sprintf(menuBuf, "SCOPE:%s", oscilloscope_enabled ? "ON" : "OFF"); break;
     default:
       if (timbre_locked && color_locked) strcpy(menuBuf, "ALL-MIDI");
@@ -501,7 +529,7 @@ void drawEngineUI() {
     display.print(menuBuf);
   }
 
-  if (!mod_cv_enabled) {
+  if (!cv_mod1) {
     char buf[16];
     int tVal = int((timbre_locked ? timbre_in : pot_timbre) * 127);
     int mVal = int((color_locked ? color_in : pot_color) * 127);
@@ -534,7 +562,7 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.1";
+  const char *version = "v1.0.2";
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
@@ -634,14 +662,14 @@ void __not_in_flash_func(handleMIDI)() {
       case 7: master_volume = d2 / 127.f; break;
       case 8: engine_idx = map(d2, 0, 127, 0, NUM_ENGINES - 1); break;
       case 9:  // Timbre
-        if (modulation_enabled) {
+        if (midi_mod) {
           timbre_in = d2 / 127.f;
           timbre_locked = true;
           last_midi_lock_time = millis();
         }
         break;
       case 10:  // Color
-        if (modulation_enabled) {
+        if (midi_mod) {
           color_in = d2 / 127.f;
           color_locked = true;
           last_midi_lock_time = millis();
@@ -650,7 +678,7 @@ void __not_in_flash_func(handleMIDI)() {
       case 11: env_attack_s = 0.01f + (d2 / 127.f) * 2.f; break;
       case 12: env_release_s = 0.01f + (d2 / 127.f) * 3.f; break;
       case 71: filter_resonance_cc = d2; break;
-      case 74: filter_cutoff_cc = d2;break;
+      case 74: filter_cutoff_cc = d2; break;
       case 15: fm_mod = d2 / 127.f; break;
       case 16: timb_mod_midi = d2 / 127.f; break;
       case 17: color_mod_midi = d2 / 127.f; break;
@@ -676,8 +704,9 @@ void saveSettings() {
   doc["rel"] = settings.env_release_s;
   doc["eng"] = settings.engine_idx;
   doc["filt"] = settings.filter_enabled;
-  doc["mod"] = settings.modulation_enabled;
-  doc["cv"] = settings.mod_cv_enabled;
+  doc["mod"] = settings.midi_mod;
+  doc["cv1"] = settings.cv_mod1;
+  doc["cv2"] = settings.cv_mod2;
   doc["timb"] = settings.timbre_in;
   doc["color"] = settings.color_in;
   doc["tcv"] = settings.timb_mod_cv;
@@ -714,8 +743,9 @@ void loadSettings() {
   settings.env_release_s = doc["rel"] | 0.03f;
   settings.engine_idx = doc["eng"] | 1;
   settings.filter_enabled = doc["filt"] | true;
-  settings.modulation_enabled = doc["mod"] | false;
-  settings.mod_cv_enabled = doc["cv"] | false;
+  settings.midi_mod = doc["mod"] | false;
+  settings.cv_mod1 = doc["cv1"] | false;
+  settings.cv_mod2 = doc["cv2"] | false;
   settings.timbre_in = doc["timb"] | 0.4f;
   settings.color_in = doc["color"] | 0.3f;
   settings.timb_mod_cv = doc["tcv"] | 0.0f;
@@ -729,8 +759,9 @@ void loadSettings() {
   env_release_s = settings.env_release_s;
   engine_idx = settings.engine_idx;
   filter_enabled = settings.filter_enabled;
-  modulation_enabled = settings.modulation_enabled;
-  mod_cv_enabled = settings.mod_cv_enabled;
+  midi_mod = settings.midi_mod;
+  cv_mod1 = settings.cv_mod1;
+  cv_mod2 = settings.cv_mod2;
   timbre_in = settings.timbre_in;
   color_in = settings.color_in;
   timb_mod_cv = settings.timb_mod_cv;
@@ -788,8 +819,9 @@ void saveButton() {
       settings.env_release_s = env_release_s;
       settings.engine_idx = engine_idx;
       settings.filter_enabled = filter_enabled;
-      settings.modulation_enabled = modulation_enabled;
-      settings.mod_cv_enabled = mod_cv_enabled;
+      settings.midi_mod = midi_mod;
+      settings.cv_mod1 = cv_mod1;
+      settings.cv_mod2 = cv_mod2;
       settings.timbre_in = timbre_in;
       settings.color_in = color_in;
       settings.timb_mod_cv = timb_mod_cv;
@@ -855,9 +887,9 @@ void setup() {
 
 void loop() {
   if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
-    updateAudio();
+  updateAudio();
   }
-  yield();
+  handleMIDI();
 }
 
 
@@ -869,7 +901,12 @@ void setup1() {
   pinMode(ENCODER_SW, INPUT_PULLUP);
 
 #if USE_SCREEN
+#if SSD1306
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
+#endif
+#ifdef SH110X
+  display.begin(0x3C, true);
+#endif
   drawSplash();
   delay(4000);
   display.clearDisplay();
@@ -879,16 +916,15 @@ void setup1() {
 
 
 void loop1() {
-  handleMIDI();
   saveButton();
 #if USE_SCREEN
   checkSavedFeedback();
 #endif
 
   static float smoothT = 0.5f;
-  static float smoothM = 0.5f;
+  static float smoothC = 0.5f;
   static float smoothTMod = 0.0f;
-  static float smoothMMod = 0.0f;
+  static float smoothCMod = 0.0f;
   static float smoothCut = 0.5f;
   static float smoothRes = 0.25f;
   static unsigned long last_pot_read = 0;
@@ -897,13 +933,13 @@ void loop1() {
     last_pot_read = millis();
 
     float rT = analogRead(POT_TIMBRE) / 1023.0f;
-    float rM = analogRead(POT_COLOR) / 1023.0f;
+    float rC = analogRead(POT_COLOR) / 1023.0f;
     float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
-    float srcM = analogRead(POT_COLOR_MOD) / 1023.0f;
+    float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
 
     const float SMOOTH_POT = 0.06f;
     pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
-    pot_color += (rM - pot_color) * SMOOTH_POT;
+    pot_color += (rC - pot_color) * SMOOTH_POT;
 
     if (pot_timbre > 0.999f) pot_timbre = 1.0f;
     if (pot_timbre < 0.001f) pot_timbre = 0.0f;
@@ -912,36 +948,38 @@ void loop1() {
     if (pot_color < 0.001f) pot_color = 0.0f;
 
     int valT = (int)(pot_timbre * 127.0f + 0.5f);
-    int valM = (int)(pot_color * 127.0f + 0.5f);
+    int valC = (int)(pot_color * 127.0f + 0.5f);
 
 
-    if (!modulation_enabled) {
+    if (!midi_mod) {
       timbre_locked = false;
       color_locked = false;
       engine_updated = true;
     }
 
 
-    if (mod_cv_enabled) {
+    if (cv_mod1) {
 
       // --- Smooth the potentiometer inputs (depth controls) ---
       smoothT += (rT - smoothT) * 0.15f;
-      smoothM += (rM - smoothM) * 0.15f;
+      smoothC += (rC - smoothC) * 0.15f;
 
       // --- Smooth the modulation sources ---
       smoothTMod += (srcT - smoothTMod) * 0.1f;  // slower smoothing
-      smoothMMod += (srcM - smoothMMod) * 0.1f;
+      smoothCMod += (srcC - smoothCMod) * 0.1f;
 
       // --- Apply modulation depth with soft scaling ---
       timb_mod_cv += ((smoothT * smoothTMod) - timb_mod_cv) * 0.05f;
-      color_mod_cv += ((smoothM * smoothMMod) - color_mod_cv) * 0.05f;
+      color_mod_cv += ((smoothC * smoothCMod) - color_mod_cv) * 0.05f;
 
       // --- Set base values for other modes ---
       timbre_in = 0.5f;
       color_in = 0.5f;
+      engine_updated = true;
+
     }
 
-    else if (modulation_enabled) {
+    else if (midi_mod) {
 
       // -------- TIMBRE --------
       if (timbre_locked) {
@@ -958,15 +996,15 @@ void loop1() {
 
       // -------- COLOR --------
       if (color_locked) {
-        if (fabsf(rM - color_in) < 0.01f) {
+        if (fabsf(rC - color_in) < 0.01f) {
           color_locked = false;
-          smoothM = rM;
+          smoothC = rC;
         }
       }
 
       if (!color_locked) {
-        smoothM += (rM - smoothM) * 0.15f;
-        color_in = smoothM;
+        smoothC += (rC - smoothC) * 0.15f;
+        color_in = smoothC;
       }
 
       engine_updated = true;
@@ -975,17 +1013,17 @@ void loop1() {
     else if (filter_enabled) {
       // --- Update filter CVs from modulation pots ---
       smoothCut += (srcT - smoothCut) * 0.1f;
-      smoothRes += (srcM - smoothRes) * 0.1f;
+      smoothRes += (srcC - smoothRes) * 0.1f;
 
       filter_cutoff_cc = (uint8_t)(smoothCut * 127.0f);
       filter_resonance_cc = (uint8_t)(smoothRes * 127.0f);
 
       // --- Keep Timbre and Color pots working as default ---
       smoothT += (rT - smoothT) * 0.08f;
-      smoothM += (rM - smoothM) * 0.08f;
+      smoothC += (rC - smoothC) * 0.08f;
 
       timbre_in = smoothT;
-      color_in = smoothM;
+      color_in = smoothC;
 
       // --- Decay any modulation CV influence smoothly ---
       timb_mod_cv *= 0.9f;
@@ -995,31 +1033,96 @@ void loop1() {
       fm_target = 0.0f;
       engine_updated = true;
 
-    } else {  // all modes off, filter off
-      // Smooth pots
+    }
+
+    else if (cv_mod2) {
+
       smoothT += (rT - smoothT) * 0.08f;
-      smoothM += (rM - smoothM) * 0.08f;
-
-      // Update engine inputs
+      smoothC += (rC - smoothC) * 0.08f;
       timbre_in = smoothT;
-      color_in = smoothM;
+      color_in = smoothC;
 
-      // Smooth modulation sources for engine/fm_mod
-      smoothTMod += (srcT - smoothTMod) * 0.05f;
-      smoothMMod += (srcM - smoothMMod) * 0.05f;
+      // --- 2. Rolling Average Filter ---
+      static float historyT[16];
+      static float historyC[16];
+      static int histIdx = 0;
 
-      // Engine / FM modulation
-      engine_idx = int(smoothTMod * float(NUM_ENGINES - 1) + 0.5f);
-      fm_mod = smoothMMod;  // respond to CV
+      historyT[histIdx] = srcT;
+      historyC[histIdx] = srcC;
+      histIdx = (histIdx + 1) % 16;
 
-      // Nothing else locked
+      float avgT = 0, avgC = 0;
+      for (int i = 0; i < 16; i++) {
+        avgT += historyT[i];
+        avgC += historyC[i];
+      }
+      avgT /= 16.0f;
+      avgC /= 16.0f;
+
+      smoothTMod += (avgT - smoothTMod) * 0.05f;
+      smoothCMod += (avgC - smoothCMod) * 0.05f;
+
+      // --- 3. Strict Deadzone ---
+      const float CV_DEADZONE = 0.15f;
+      bool cvT_active = (smoothTMod > CV_DEADZONE);
+      bool cvC_active = (smoothCMod > CV_DEADZONE);
+
+      // --- 4. Large-Band Hysteresis for Engines ---
+      static float lockT = -1.0f;
+      const float ENG_HYST = 0.10f;
+
+      if (cvT_active) {
+        if (fabsf(smoothTMod - lockT) > ENG_HYST) {
+          float norm = (smoothTMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
+          int new_idx = (int)(norm * (float)NUM_ENGINES);
+          new_idx = constrain(new_idx, 0, NUM_ENGINES - 1);
+
+          if (new_idx != engine_idx) {
+            engine_idx = new_idx;
+            lockT = smoothTMod;
+            engine_updated = true;
+          }
+        }
+      } else {
+        lockT = -1.0f;
+      }
+
+      // --- 5. Large-Band Hysteresis for FM ---
+      static float lockC = 0.0f;
+      const float FM_HYST = 0.1f;
+
+      if (cvC_active) {
+        if (fabsf(smoothCMod - lockC) > FM_HYST) {
+          float target_fm = (smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
+          fm_mod = constrain(target_fm, 0.0f, 1.0f);
+          lockC = smoothCMod;
+        }
+      } else {
+        fm_mod *= 0.5f;
+        if (fm_mod < 0.01f) {
+          fm_mod = 0.0f;
+          lockC = 0.0f;
+        }
+      }
+
       timbre_locked = false;
       color_locked = false;
+    }
 
-      // Filter decay
-      timb_mod_cv *= 0.9f;
-      color_mod_cv *= 0.9f;
 
+    else {
+      smoothT += (rT - smoothT) * 0.08f;
+      smoothC += (rC - smoothC) * 0.08f;
+      timbre_in = smoothT;
+      color_in = smoothC;
+
+      // Zero out all CV-related variables
+      timb_mod_cv = 0.0f;
+      color_mod_cv = 0.0f;
+      fm_mod = 0.0f;
+
+      timbre_locked = false;
+      color_locked = false;
       engine_updated = true;
     }
   }
@@ -1052,17 +1155,32 @@ void loop1() {
             break;
           case FILTER_TOGGLE:
             filter_enabled = !filter_enabled;
-            mod_cv_enabled = false;
-            modulation_enabled = false;
+            midi_mod = false;
+            cv_mod1 = false;
+            cv_mod2 = false;
+
             break;
-          case MOD_TOGGLE:  // MIDI MOD
-            modulation_enabled = !modulation_enabled;
-            if (modulation_enabled) mod_cv_enabled = false;
+          case MIDI_MOD:
+            midi_mod = !midi_mod;
+
+            if (midi_mod) {
+              cv_mod1 = false;
+              cv_mod2 = false;
+            }
             break;
-          case CV_MOD_TOGGLE:  // CV MOD
-            mod_cv_enabled = !mod_cv_enabled;
+          case CV_MOD1:
+            cv_mod1 = !cv_mod1;
             filter_enabled = false;
-            if (mod_cv_enabled) modulation_enabled = false;
+            cv_mod2 = false;
+            if (cv_mod1) midi_mod = false;
+            break;
+          case CV_MOD2:
+            cv_mod2 = !cv_mod2;
+            cv_mod1 = false;
+            filter_enabled = false;
+            if (cv_mod2) midi_mod = false;
+            break;
+            if (cv_mod1) midi_mod = false;
             break;
           case MIDI_CH:
             midi_ch = constrain(midi_ch + step, 1, 16);
@@ -1077,7 +1195,12 @@ void loop1() {
 
           default:
             display_mode = ENGINE_SELECT_MODE;
+            midi_mod = false;
+            cv_mod1 = false;
+            cv_mod2 = false;
+            filter_enabled = false;
             engine_updated = true;
+
             break;
         }
         last_encoder_activity = millis();

@@ -38,11 +38,17 @@ The synthesizer operates in three primary display modes:
 - Timbre & Color (default)  
 - CV1 & CV2 → Filter cutoff & resonance
 
-### CV Modulation Mode
+### CV Modulation Mode1
 
-- Timbre & Color → Control modulation depth  
+- Timbre & Color modulation
+- POTS → modulation depth  
 - CV1 & CV2 →  Modulation source
 
+### CV Modulation Mode2
+
+- CV1 → Engine selection
+- CV2 → FM MOD
+  
 ### MIDI Modulation Mode
 
 - Timbre & Color (Soft takeover mode)
@@ -54,8 +60,6 @@ The synthesizer operates in three primary display modes:
 ### All Modes OFF
 
 - Timbre & Color (default)  
-- CV1 → Engine selection
-- CV2 → FM MOD
 
 ---
 
@@ -119,26 +123,26 @@ For this project I use RP2040 Zero model, so adjust GPIO numbers for your board.
 Connect your **PCM5102** or similar I2S DAC:
 * **VCC/VIN** -> Pico 3.3V (Pin 36)
 * **GND** -> Pico GND
-* **LCK (LRCK)** -> Pico GP11 (Pin 15) 
-* **BCK (BCLK)** -> Pico GP10 (Pin 14)
-* **DIN (DATA)** -> Pico GP9 (Pin 12)
+* **LCK (LRCK)** -> Pico GP11 
+* **BCK (BCLK)** -> Pico GP10 
+* **DIN (DATA)** -> Pico GP9 
 
 ### 2. Control & Display
-* **OLED SDA** -> Pico GP0 (Pin 1)
-* **OLED SCL** -> Pico GP1 (Pin 2)
-* **Encoder CLK** -> Pico GP2 (Pin 4)
-* **Encoder DT** -> Pico GP3 (Pin 5)
-* **Encoder SW** -> Pico GP4 (Pin 6)
+* **OLED SDA** -> Pico GP0 
+* **OLED SCL** -> Pico GP1 
+* **Encoder CLK** -> Pico GP2 
+* **Encoder DT** -> Pico GP3 
+* **Encoder SW** -> Pico GP4 
 
 ### 3. Potentiometers (ADC)
 Connect the outer pins to 3.3V and GND, and the center wiper to:
-* **Pot 1 (Timbre)** -> GP26 (ADC0)
-* **Pot 2 (Color)** -> GP27 (ADC1)
-* **Pot 3 (CV1)** -> GP28 (ADC2)
-* **Pot 4 (CV2)** -> GP29 (ADC3)
+* **Pot 1 (Timbre)** -> GP26 
+* **Pot 2 (Color)** -> GP27 
+* **Pot 3 (CV1)** -> GP28 
+* **Pot 4 (CV2)** -> GP29 
 
 ### 4. MIDI Input (UART)
-Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13 (Pin 17)**.
+Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
 
 ---
 
