@@ -81,7 +81,7 @@
 #define BUTTON_DEBOUNCE_MS 200
 #define LONG_PRESS_MS 1000
 
-#define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
+#define USE_UART_MIDI 1  // 0 = USB MIDI, 1 = UART MIDI
 #define MIDI_UART_RX 13
 
 #define USE_SCREEN 1
@@ -177,6 +177,8 @@ const unsigned long AUTO_REVERT_MS = 4000;
 volatile unsigned long last_encoder_activity = 0;
 volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
 volatile EncoderState enc_state = ENGINE_SELECT;
+
+volatile bool system_ready = false;
 
 // For UI updates
 float pot_timbre = 0.5f;
@@ -886,8 +888,14 @@ void setup() {
 
 
 void loop() {
+
+  if (!system_ready) {
+    yield();  // Wait for Core 1 to finish the splash
+    return;
+  }
+
   if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
-  updateAudio();
+    updateAudio();
   }
   handleMIDI();
 }
@@ -912,6 +920,8 @@ void setup1() {
   display.clearDisplay();
   display.display();
 #endif
+
+  system_ready = true;
 }
 
 
