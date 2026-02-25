@@ -154,5 +154,6 @@ Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
   
 ---
 ##  Version history
+* 2026-02-26 - v1.0.2
 * 2026-02-03 - v1.0.1  
 * 2026-02-02 - First release v1.0
