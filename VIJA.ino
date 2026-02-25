@@ -4,7 +4,6 @@
 
   Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
   
-  
   Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
   in semi-modular format.
 
@@ -35,7 +34,6 @@
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
 
-  
   stmlib, braids source libs
   Copyright (c) 2020 (emilie.o.gillet@gmail.com)
   MIT License
