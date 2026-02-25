@@ -38,11 +38,17 @@ The synthesizer operates in three primary display modes:
 - Timbre & Color (default)  
 - CV1 & CV2 → Filter cutoff & resonance
 
-### CV Modulation Mode
+### CV Modulation Mode1
 
-- Timbre & Color → Control modulation depth  
+- Timbre & Color modulation
+- POTS → modulation depth  
 - CV1 & CV2 →  Modulation source
 
+### CV Modulation Mode2
+
+- CV1 → Engine selection
+- CV2 → FM MOD
+  
 ### MIDI Modulation Mode
 
 - Timbre & Color (Soft takeover mode)
@@ -54,8 +60,6 @@ The synthesizer operates in three primary display modes:
 ### All Modes OFF
 
 - Timbre & Color (default)  
-- CV1 → Engine selection
-- CV2 → FM MOD
 
 ---
 
