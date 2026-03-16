@@ -3,8 +3,6 @@
 Raspberry PICO digital synthesizer based on **Mutable Instruments Braids** macro oscillator 
 in semi-modular format.  
 
-🎥 [Watch demo](https://www.youtube.com/watch?v=sYbr-VH2LuQ)
-
 ---
 
 ## 🚀 Features
