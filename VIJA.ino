@@ -1,10 +1,10 @@
 
 /*
-  VIJA (v1.0.2) 
+  VIJA (v1.0.2)
 
   Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
-  
-  Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator 
+
+  Raspberry PICO polyphonic synthesizer based on Mutable Instruments Braids macro oscillator
   in semi-modular format.
 
   Features:
@@ -14,7 +14,7 @@
   - Filter (SVF)
   - OLED display with menu system & oscilloscope
   - Synth controls via potentiometers or MIDI CC
-  
+
   Hardware:
   - RP2040 or RP2350 board, I2S PCM5102 DAC, SSD1306 OLED, rotary encoder with button, 2 pots, 2 cv jacks or 2 more pots
   - MIDI via USB or UART
@@ -24,12 +24,12 @@
   Compilation:
 
   RP2040: - Optimize: Optimize Even More (-O3)
-          - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
-          - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
+          - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count
+          - Sample rate: 32000 (4 voices) / 44100 (3 voices)
   RP2350:
          - Optimize: Optimize Even More (-O3)
          - Sample rate: 48000
-  
+
   Software:
  - BRAIDS and STMLIB libraries ported by Mark Washeim:
   https://github.com/poetaster/arduinoMI (MIT License)
@@ -37,7 +37,7 @@
   stmlib, braids source libs
   Copyright (c) 2020 (emilie.o.gillet@gmail.com)
   MIT License
-  
+
 */
 
 #include <Arduino.h>
