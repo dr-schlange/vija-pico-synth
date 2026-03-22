@@ -81,7 +81,7 @@
 #define BUTTON_DEBOUNCE_MS 200
 #define LONG_PRESS_MS 1000
 
-#define USE_UART_MIDI 1  // 0 = USB MIDI, 1 = UART MIDI
+#define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
 #define MIDI_UART_RX 13
 
 #define USE_SCREEN 1
@@ -150,7 +150,7 @@ volatile bool env_params_changed = true;
 volatile unsigned long last_param_change = 0;
 unsigned long last_midi_lock_time = 0;
 
-volatile bool midi_mod = false;
+volatile bool midi_mod = true;
 volatile bool cv_mod1 = false;
 volatile bool cv_mod2 = false;
 
@@ -232,7 +232,7 @@ SynthSettings settings = {
   .env_release_s = 0.01f,
   .engine_idx = 1,
   .filter_enabled = true,
-  .midi_mod = false,
+  .midi_mod = true,
   .cv_mod1 = false,
   .cv_mod2 = false,
   .timbre_in = 0.4f,
@@ -745,7 +745,7 @@ void loadSettings() {
   settings.env_release_s = doc["rel"] | 0.03f;
   settings.engine_idx = doc["eng"] | 1;
   settings.filter_enabled = doc["filt"] | true;
-  settings.midi_mod = doc["mod"] | false;
+  settings.midi_mod = doc["mod"] | true;
   settings.cv_mod1 = doc["cv1"] | false;
   settings.cv_mod2 = doc["cv2"] | false;
   settings.timbre_in = doc["timb"] | 0.4f;
