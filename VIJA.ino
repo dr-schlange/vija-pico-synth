@@ -846,6 +846,7 @@ void saveButton() {
 void setup() {
   // Serial.begin(115200);
   bool fs_ready = false;
+  LittleFS.format();
   if (!LittleFS.begin()) {
     //  Serial.println("LittleFS Mount Failed. Attempting to format...");
     LittleFS.format();
