@@ -1145,7 +1145,7 @@ void loop1() {
   int clk = digitalRead(ENCODER_CLK);
   static unsigned long last_enc_time = 0;
 
-  if (clk != lClk && millis() - last_enc_time > 8) {
+  if (lClk == LOW && clk == HIGH && millis() - last_enc_time > 8) {
     last_enc_time = millis();
     int step = (digitalRead(ENCODER_DT) != clk) ? 1 : -1;
 
