@@ -860,6 +860,10 @@ void setup() {
     fs_ready = true;
   }
 
+  TinyUSBDevice.setManufacturerDescriptor("ledlaux");
+  TinyUSBDevice.setProductDescriptor("Vija Synth");
+  TinyUSBDevice.setSerialDescriptor("NLYHW_00");
+
   usb_midi.begin();
   i2s_output.setFrequency(SAMPLE_RATE);
   i2s_output.setDATA(I2S_DATA_PIN);
