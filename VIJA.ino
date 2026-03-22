@@ -1,6 +1,6 @@
 
 /*
-  VIJA (v1.0.2)
+  VIJA (v1.0.3)
 
   Copyright (c) 2025 Vadims Maksimovs ledlaux.github.com | GPLv3
 
@@ -49,6 +49,9 @@
 #include <Wire.h>
 #include <LittleFS.h>
 #include <ArduinoJson.h>
+#include "encoder.h"
+
+#define VIJA_VERSION "v1.0.3"
 
 #define SSD1306 1  //ssd1306 display
 // #define SH110X 1// sh110x display
@@ -78,7 +81,7 @@
 #define ENCODER_CLK 2
 #define ENCODER_DT 3
 #define ENCODER_SW 4
-#define BUTTON_DEBOUNCE_MS 200
+// #define BUTTON_DEBOUNCE_MS 200
 #define LONG_PRESS_MS 1000
 
 #define USE_UART_MIDI 0  // 0 = USB MIDI, 1 = UART MIDI
@@ -88,6 +91,10 @@
 #define OLED_SDA 0
 #define OLED_SCL 1
 #define SCOPE_WIDTH 128
+
+#define SCREEN_REFRESH_TIME 60
+#define IDLETIME_BEFORE_ENGINE_SELECT_MS 5000
+#define IDLETIME_BEFORE_SCOPE_DISPLAY_MS 10000
 
 // Splash screen
 const unsigned char waveform_bitmap[] PROGMEM = {
@@ -115,16 +122,17 @@ enum DisplayMode { ENGINE_SELECT_MODE,
                    SETTINGS_MODE,
                    OSCILLOSCOPE_MODE };
 
-enum EncoderState { ENGINE_SELECT,
-                    VOLUME_ADJUST,
-                    ATTACK_ADJUST,
-                    RELEASE_ADJUST,
-                    FILTER_TOGGLE,
-                    MIDI_MOD,
-                    CV_MOD1,
-                    CV_MOD2,
-                    MIDI_CH,
-                    SCOPE_TOGGLE };
+enum EncoderMode { ENGINE_SELECT,
+                   VOLUME_ADJUST,
+                   ATTACK_ADJUST,
+                   RELEASE_ADJUST,
+                   FILTER_TOGGLE,
+                   MIDI_MOD,
+                   CV_MOD1,
+                   CV_MOD2,
+                   MIDI_CH,
+                   SCOPE_TOGGLE,
+                   ENCODER_MODES_NUM };
 
 volatile uint8_t midi_ch = 1;
 volatile int engine_idx = 1;
@@ -162,6 +170,7 @@ volatile bool color_locked = false;
 volatile bool filter_enabled = true;
 volatile float filter_mix = 1.0f;
 volatile uint8_t filter_cutoff_cc = 64;
+static bool filter_midi_owned = false;
 volatile uint8_t filter_resonance_cc = 32;
 
 volatile bool save_requested = false;
@@ -174,9 +183,8 @@ volatile float scope_buffer_front[SCOPE_WIDTH];
 volatile float scope_buffer_back[SCOPE_WIDTH];
 
 const unsigned long AUTO_REVERT_MS = 4000;
-volatile unsigned long last_encoder_activity = 0;
-volatile DisplayMode display_mode = ENGINE_SELECT_MODE;
-volatile EncoderState enc_state = ENGINE_SELECT;
+DisplayMode display_mode = ENGINE_SELECT_MODE;
+volatile EncoderMode enc_mode = ENGINE_SELECT;
 
 volatile bool system_ready = false;
 
@@ -221,7 +229,7 @@ struct SynthSettings {
   float timb_mod_cv;
   float color_mod_cv;
   uint8_t midi_ch;
-  EncoderState enc_state;
+  EncoderMode enc_state;
   bool oscilloscope_enabled;
 };
 
@@ -247,6 +255,9 @@ SynthSettings settings = {
 Voice voices[MAX_VOICES];
 uint32_t global_age = 0;
 float attack_coeff_cached, release_coeff_cached;
+
+Encoder encoder = EncoderNew(ENCODER_CLK, ENCODER_DT, ENCODER_SW);
+
 
 I2S i2s_output(OUTPUT);
 
@@ -278,6 +289,7 @@ const char *const engine_names[] = {
 };
 
 constexpr int NUM_ENGINES = sizeof(engine_names) / sizeof(engine_names[0]);
+
 
 
 int findFreeVoice() {
@@ -506,7 +518,7 @@ void drawEngineUI() {
 
   display.setTextSize(1);
   char menuBuf[32] = "";
-  switch (enc_state) {
+  switch (enc_mode) {
     case VOLUME_ADJUST: sprintf(menuBuf, "VOL:%3d", int(master_volume * 100)); break;
     case ATTACK_ADJUST: sprintf(menuBuf, "A:%.2f", env_attack_s); break;
     case RELEASE_ADJUST: sprintf(menuBuf, "R:%.2f", env_release_s); break;
@@ -546,7 +558,6 @@ void drawEngineUI() {
   display.display();
 }
 
-
 void drawSplash() {
 
   display.clearDisplay();
@@ -564,11 +575,50 @@ void drawSplash() {
   display.getTextBounds(subtitle, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 40);
   display.println(subtitle);
-  const char *version = "v1.0.2";
+  const char *version = VIJA_VERSION;
   display.getTextBounds(version, 0, 0, &x1, &y1, &w, &h);
   display.setCursor((128 - w) / 2, 54);
   display.println(version);
   display.display();
+}
+
+
+inline void draw_ui() {
+  static int last_engine_draw = -1;
+  static unsigned long last_draw_time = 0;
+
+  if (millis() - last_draw_time > SCREEN_REFRESH_TIME) {
+    last_draw_time = millis();
+    unsigned long idle = millis() - encoder.last_encoder_activity;
+
+    if (display_mode == SETTINGS_MODE && idle > IDLETIME_BEFORE_ENGINE_SELECT_MS) {
+      display_mode = ENGINE_SELECT_MODE;
+      enc_mode = ENGINE_SELECT;
+      engine_updated = true;
+      last_engine_draw = -1;
+    } else if (display_mode == ENGINE_SELECT_MODE && idle > IDLETIME_BEFORE_SCOPE_DISPLAY_MS && oscilloscope_enabled) {
+      display_mode = OSCILLOSCOPE_MODE;
+      engine_updated = true;
+      last_engine_draw = -1;
+    }
+    switch (display_mode) {
+      case OSCILLOSCOPE_MODE:
+        drawScope();
+        break;
+      case ENGINE_SELECT_MODE:
+      case SETTINGS_MODE:
+        if (engine_updated || engine_idx != last_engine_draw) {
+          drawEngineUI();
+          last_engine_draw = engine_idx;
+          engine_updated = false;
+        }
+        break;
+    }
+  }
+}
+#else
+inline void draw_ui() {
+  // Do nothing, it should be inlined/removed by the optimisation phase (hopefully)
 }
 #endif
 
@@ -679,11 +729,20 @@ void __not_in_flash_func(handleMIDI)() {
         break;
       case 11: env_attack_s = 0.01f + (d2 / 127.f) * 2.f; break;
       case 12: env_release_s = 0.01f + (d2 / 127.f) * 3.f; break;
-      case 71: filter_resonance_cc = d2; break;
-      case 74: filter_cutoff_cc = d2; break;
+      case 71:
+        filter_resonance_cc = d2;
+        filter_midi_owned = true;
+        break;
+      case 74:
+        filter_cutoff_cc = d2;
+        filter_midi_owned = true;
+        break;
       case 15: fm_mod = d2 / 127.f; break;
       case 16: timb_mod_midi = d2 / 127.f; break;
       case 17: color_mod_midi = d2 / 127.f; break;
+      case 127:
+        if (d2 == 127) reset_usb_boot(0, 0);
+        break;
     }
     engine_updated = true;
     last_param_change = millis();
@@ -753,7 +812,7 @@ void loadSettings() {
   settings.timb_mod_cv = doc["tcv"] | 0.0f;
   settings.color_mod_cv = doc["mcv"] | 0.0f;
   settings.midi_ch = doc["ch"] | 1;
-  settings.enc_state = (EncoderState)(doc["enc"] | 0);
+  settings.enc_state = (EncoderMode)(doc["enc"] | 0);
   settings.oscilloscope_enabled = doc["osc"] | true;
 
   master_volume = settings.master_volume;
@@ -769,7 +828,7 @@ void loadSettings() {
   timb_mod_cv = settings.timb_mod_cv;
   color_mod_cv = settings.color_mod_cv;
   midi_ch = settings.midi_ch;
-  enc_state = settings.enc_state;
+  enc_mode = settings.enc_state;
   oscilloscope_enabled = settings.oscilloscope_enabled;
 
   lastSavedSettings = settings;
@@ -842,6 +901,109 @@ void saveButton() {
   last_btn_state = btn;
 }
 
+void handle_menu(Encoder *encoder) {
+  const int8_t step = encoder_decode_step(encoder);
+  if (step) {
+    switch (display_mode) {
+      case ENGINE_SELECT_MODE:
+        engine_idx = (engine_idx + step + NUM_ENGINES) % NUM_ENGINES;
+        engine_updated = true;
+        encoder->last_encoder_activity = millis();
+        break;
+
+      case SETTINGS_MODE:
+        switch (enc_mode) {
+          case VOLUME_ADJUST: master_volume = constrain(master_volume + step * 0.01f, 0.f, 1.f); break;
+          case ATTACK_ADJUST:
+            env_attack_s = constrain(env_attack_s + step * 0.01f, 0.001f, 1.f);
+            env_params_changed = true;
+            break;
+          case RELEASE_ADJUST:
+            env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
+            env_params_changed = true;
+            break;
+          case FILTER_TOGGLE:
+            filter_enabled = !filter_enabled;
+            // midi_mod = false;
+            cv_mod1 = false;
+            cv_mod2 = false;
+
+            break;
+          case MIDI_MOD:
+            midi_mod = !midi_mod;
+
+            // if (midi_mod) {
+            //   cv_mod1 = false;
+            //   cv_mod2 = false;
+            // }
+            break;
+          case CV_MOD1:
+            cv_mod1 = !cv_mod1;
+            filter_enabled = false;
+            cv_mod2 = false;
+            // if (cv_mod1) midi_mod = false;
+            break;
+          case CV_MOD2:
+            cv_mod2 = !cv_mod2;
+            cv_mod1 = false;
+            filter_enabled = false;
+            // if (cv_mod2) midi_mod = false;
+            break;
+          case MIDI_CH:
+            midi_ch = constrain(midi_ch + step, 1, 16);
+            break;
+          case SCOPE_TOGGLE:
+            oscilloscope_enabled = !oscilloscope_enabled;
+            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) {
+              display_mode = ENGINE_SELECT_MODE;
+              scope_ready = false;
+            }
+            break;
+
+          default:
+            display_mode = ENGINE_SELECT_MODE;
+            midi_mod = true;
+            cv_mod1 = false;
+            cv_mod2 = false;
+            filter_enabled = false;
+            engine_updated = true;
+
+            break;
+        }
+        encoder->last_encoder_activity = millis();
+        engine_updated = true;
+        break;
+
+      case OSCILLOSCOPE_MODE:
+        display_mode = ENGINE_SELECT_MODE;
+        engine_updated = true;
+        encoder->last_encoder_activity = millis();
+        break;
+    }
+  }
+
+  if (encoder_sw_pressed(encoder)) {
+    switch (display_mode) {
+      case ENGINE_SELECT_MODE:
+        display_mode = SETTINGS_MODE;
+        enc_mode = ENGINE_SELECT;
+        engine_updated = true;
+        break;
+
+      case SETTINGS_MODE:
+        enc_mode = (EncoderMode)((enc_mode + 1) % (ENCODER_MODES_NUM - 1));
+        engine_updated = true;
+        break;
+
+      case OSCILLOSCOPE_MODE:
+        display_mode = SETTINGS_MODE;
+        enc_mode = (EncoderMode)((enc_mode + 1) % (ENCODER_MODES_NUM - 1));
+        engine_updated = true;
+        break;
+    }
+  }
+  draw_ui();
+}
 
 void setup() {
   // Serial.begin(115200);
@@ -1025,13 +1187,25 @@ void loop1() {
       engine_updated = true;
     }
 
-    else if (filter_enabled) {
+    if (filter_enabled) {
       // --- Update filter CVs from modulation pots ---
       smoothCut += (srcT - smoothCut) * 0.1f;
       smoothRes += (srcC - smoothRes) * 0.1f;
 
-      filter_cutoff_cc = (uint8_t)(smoothCut * 127.0f);
-      filter_resonance_cc = (uint8_t)(smoothRes * 127.0f);
+      static uint8_t last_pot_cut = 0;
+      static uint8_t last_pot_res = 0;
+      uint8_t new_cut = (uint8_t)(smoothCut * 127.0f);
+      if (new_cut != last_pot_cut) {
+        filter_cutoff_cc = new_cut;
+        filter_midi_owned = false;
+        last_pot_cut = new_cut;
+      }
+      uint8_t new_res = (uint8_t)(smoothRes * 127.0f);
+      if (new_res != last_pot_res) {
+        filter_resonance_cc = new_res;
+        filter_midi_owned = false;
+        last_pot_res = new_res;
+      }
 
       // --- Keep Timbre and Color pots working as default ---
       smoothT += (rT - smoothT) * 0.08f;
@@ -1044,8 +1218,8 @@ void loop1() {
       timb_mod_cv *= 0.9f;
       color_mod_cv *= 0.9f;
 
-      // --- FM is inactive in filter mode ---
-      fm_target = 0.0f;
+      // --- FM is inactive in filter mode ---  <-- not sure why
+      // fm_target = 0.0f;
       engine_updated = true;
 
     }
@@ -1142,160 +1316,8 @@ void loop1() {
     }
   }
 
-  static int lClk = digitalRead(ENCODER_CLK);
-  int clk = digitalRead(ENCODER_CLK);
-  static unsigned long last_enc_time = 0;
-
-  if (lClk == LOW && clk == HIGH && millis() - last_enc_time > 8) {
-    last_enc_time = millis();
-    int step = (digitalRead(ENCODER_DT) != clk) ? 1 : -1;
-
-    switch (display_mode) {
-      case ENGINE_SELECT_MODE:
-        engine_idx = (engine_idx + step + NUM_ENGINES) % NUM_ENGINES;
-        engine_updated = true;
-        last_encoder_activity = millis();
-        break;
-
-      case SETTINGS_MODE:
-        switch (enc_state) {
-          case VOLUME_ADJUST: master_volume = constrain(master_volume + step * 0.01f, 0.f, 1.f); break;
-          case ATTACK_ADJUST:
-            env_attack_s = constrain(env_attack_s + step * 0.01f, 0.001f, 1.f);
-            env_params_changed = true;
-            break;
-          case RELEASE_ADJUST:
-            env_release_s = constrain(env_release_s + step * 0.01f, 0.01f, 2.f);
-            env_params_changed = true;
-            break;
-          case FILTER_TOGGLE:
-            filter_enabled = !filter_enabled;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
-
-            break;
-          case MIDI_MOD:
-            midi_mod = !midi_mod;
-
-            if (midi_mod) {
-              cv_mod1 = false;
-              cv_mod2 = false;
-            }
-            break;
-          case CV_MOD1:
-            cv_mod1 = !cv_mod1;
-            filter_enabled = false;
-            cv_mod2 = false;
-            if (cv_mod1) midi_mod = false;
-            break;
-          case CV_MOD2:
-            cv_mod2 = !cv_mod2;
-            cv_mod1 = false;
-            filter_enabled = false;
-            if (cv_mod2) midi_mod = false;
-            break;
-            if (cv_mod1) midi_mod = false;
-            break;
-          case MIDI_CH:
-            midi_ch = constrain(midi_ch + step, 1, 16);
-            break;
-          case SCOPE_TOGGLE:
-            oscilloscope_enabled = !oscilloscope_enabled;
-            if (!oscilloscope_enabled && display_mode == OSCILLOSCOPE_MODE) {
-              display_mode = ENGINE_SELECT_MODE;
-              scope_ready = false;
-            }
-            break;
-
-          default:
-            display_mode = ENGINE_SELECT_MODE;
-            midi_mod = false;
-            cv_mod1 = false;
-            cv_mod2 = false;
-            filter_enabled = false;
-            engine_updated = true;
-
-            break;
-        }
-        last_encoder_activity = millis();
-        engine_updated = true;
-        break;
-
-      case OSCILLOSCOPE_MODE:
-        display_mode = ENGINE_SELECT_MODE;
-        engine_updated = true;
-        last_encoder_activity = millis();
-        break;
-    }
-  }
-  lClk = clk;
-
-  static int lBtn = HIGH;
-  static unsigned long last_btn_time = 0;
-
-  int btn = digitalRead(ENCODER_SW);
-
-  if (lBtn == HIGH && btn == LOW && millis() - last_btn_time > BUTTON_DEBOUNCE_MS) {
-
-    last_btn_time = millis();
-    last_encoder_activity = millis();
-
-    switch (display_mode) {
-      case ENGINE_SELECT_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = ENGINE_SELECT;
-        engine_updated = true;
-        break;
-
-      case SETTINGS_MODE:
-        enc_state = (EncoderState)((enc_state + 1) % 9);
-        engine_updated = true;
-        break;
-
-      case OSCILLOSCOPE_MODE:
-        display_mode = SETTINGS_MODE;
-        enc_state = (EncoderState)((enc_state + 1) % 9);
-        engine_updated = true;
-        break;
-    }
-  }
-
-  lBtn = btn;
-
-#if USE_SCREEN
-  static int last_engine_draw = -1;
-  static unsigned long last_draw_time = 0;
-
-  if (millis() - last_draw_time > 60) {
-    last_draw_time = millis();
-    unsigned long idle = millis() - last_encoder_activity;
-
-    if (display_mode == SETTINGS_MODE && idle > 5000) {
-      display_mode = ENGINE_SELECT_MODE;
-      enc_state = ENGINE_SELECT;
-      engine_updated = true;
-      last_engine_draw = -1;
-    } else if (display_mode == ENGINE_SELECT_MODE && idle > 10000 && oscilloscope_enabled) {
-      display_mode = OSCILLOSCOPE_MODE;
-      engine_updated = true;
-      last_engine_draw = -1;
-    }
-    switch (display_mode) {
-      case OSCILLOSCOPE_MODE:
-        drawScope();
-        break;
-      case ENGINE_SELECT_MODE:
-      case SETTINGS_MODE:
-        if (engine_updated || engine_idx != last_engine_draw) {
-          drawEngineUI();
-          last_engine_draw = engine_idx;
-          engine_updated = false;
-        }
-        break;
-    }
-  }
-#endif
+  // Deal with encoder menu/states
+  handle_menu(&encoder);
 
   yield();
 }
