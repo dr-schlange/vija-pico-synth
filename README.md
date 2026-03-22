@@ -5,7 +5,7 @@ in semi-modular format.
 
 ---
 
-## 🚀 Features
+## Features
 
 * **40+ Oscillator Engines:** Includes VA, FM, Additive, Wavetable, Physical Modeling and Drums.
 * **4-Voice Polyphony:** Per-sample AR (Attack-Release) envelopes.
@@ -16,7 +16,7 @@ in semi-modular format.
 
 ---
 
-## 🕹 Menu System & UI
+## Menu System & UI
 The synthesizer operates in three primary display modes:
 1.  **ENGINE SELECT:** Rotate the encoder to scroll through engines  
 2.  **SETTINGS:** Click the encoder button to cycle through parameters
@@ -61,7 +61,7 @@ The synthesizer operates in three primary display modes:
 
 ---
 
-## 📟 MIDI Implementation (CC Chart)
+## MIDI Implementation (CC Chart)
 
 VIJA responds to the following Control Change (CC) messages on the selected MIDI Channel:
 
@@ -79,41 +79,38 @@ VIJA responds to the following Control Change (CC) messages on the selected MIDI
 | **64** | Sustain (Hold notes) |
 | **71** | Filter Resonance |
 | **74** | Filter Cutoff |
+| **127** | Reset USB to upload from IDE (WARNING: for dev mode) |
 
 ---
 
-## 💻 Software Setup
+## Software Setup
 
 1.  **Arduino IDE:** Install the [Earle Philhower Pico Core](https://github.com/earlephilhower/arduino-pico)
 2.  **Libraries:**
-
-- arduinoMI project (ported Mutable Instruments libraries)
-  - STMLIB  https://github.com/poetaster/STMLIB  
-  - BRAIDS  https://github.com/poetaster/BRAIDS  
-
-- I2S
- 
-- Adafruit TinyUSB
-
-- Adafruit SSD1306 or SH110X display
-
-- LittleFS & ArduinoJson for saving settings
+  - arduinoMI project (ported Mutable Instruments libraries)
+    - STMLIB  https://github.com/poetaster/STMLIB  
+    - BRAIDS  https://github.com/poetaster/BRAIDS  
+  - I2S
+  - Adafruit TinyUSB
+  - Adafruit SSD1306 or SH110X display
+  - LittleFS & ArduinoJson for saving settings
 
 3.  **Compilation Settings:**
    
-   - Enable flash file system for saving menu settings:  
-     Flash size: "2MB (Sketch:1MB, FS:1MB)"
-     
-   * **RP2040:**
-              - Optimize: Fast (-Ofast)    
-              - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
-              - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
-   * **RP2350:**
-              - Optimize: Fast (-Ofast)  
-              - Sample rate: 48000
+  - Enable flash file system for saving menu settings:  
+    Flash size: "2MB (Sketch:1984KB, FS:64KB)"
+  - Enable USB Stack: Adafruit TinyUSB
+
+  * **RP2040:**
+        - Optimize: Fast (-O3)    
+        - CPU Speed: 200-240mhz (Overclock) depending on the sample rate and needed voice count   
+        - Sample rate: 32000 (4 voices) / 44100 (3 voices)  
+  * **RP2350:**
+        - Optimize: Fast (-Ofast)  
+        - Sample rate: 48000
 ---
 
-## ⚡ Schematic & Wiring
+## Schematic & Wiring
 
 For this project I use RP2040 Zero model, so adjust GPIO numbers for your board.
 
@@ -137,7 +134,7 @@ Connect the outer pins to 3.3V and GND, and the center wiper to:
 * **Pot 1 (Timbre)** -> GP26 
 * **Pot 2 (Color)** -> GP27 
 * **Pot 3 (CV1)** -> GP28 
-* **Pot 4 (CV2)** -> GP29 
+* **Pot 4 (CV2)** -> GP29   (Raspberry Pi Pico, PicoW don't have GP29!)
 
 ### 4. MIDI Input (UART)
 Connect your MIDI Jack via a 6N138 optocoupler circuit to **GP13**.
