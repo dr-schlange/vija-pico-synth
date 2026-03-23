@@ -53,6 +53,13 @@
 
 #define VIJA_VERSION "v1.0.3"
 
+#define DEBUG false
+#if DEBUG
+#define DEBUG_PRINTLN(...) Serial.println(__VA_ARGS__)
+#else
+#define DEBUG_PRINTLN(...)
+#endif
+
 #define SSD1306 1  //ssd1306 display
 // #define SH110X 1// sh110x display
 
@@ -72,12 +79,15 @@
 #define AUDIO_BLOCK 32
 #define MAX_VOICES 4
 
+#define INIT_CUTOFF (32767 / 4)
+#define INIT_RESONANCE (32767 / 2)
+
 #define USE_POTS 1
 #define POT_TIMBRE A0      // GPIO26
 #define POT_COLOR A1       // GPIO27
 #define POT_TIMBRE_MOD A2  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
-#define HAS_A3 0  // RPI Pico W doen't have GPIO29
+#define HAS_A3 0           // RPI Pico W doen't have GPIO29
 
 #define ENCODER_CLK 2
 #define ENCODER_DT 3
@@ -311,12 +321,13 @@ static RuntimeState runtime_state = {
 #endif
 };
 #define SET_ENGINE_REFRESH_UPDATE runtime_state.engine_updated = true
+#define ENGINE_UPDATED runtime_state->engine_updated = true
+#define SET_SYSTEM_READY() runtime_state.system_ready = true
 
 Voice voices[MAX_VOICES];
 uint32_t global_age = 0;
 
 Encoder encoder = EncoderNew(ENCODER_CLK, ENCODER_DT, ENCODER_SW);
-
 I2S i2s_output(OUTPUT);
 
 braids::Svf global_filter;
@@ -626,7 +637,7 @@ void drawSplash() {
 }
 
 
-inline void draw_ui() {
+static inline void draw_ui() {
   if (millis() - runtime_state.last_draw_time > SCREEN_REFRESH_TIME) {
     runtime_state.last_draw_time = millis();
     unsigned long idle = millis() - encoder.last_encoder_activity;
@@ -657,13 +668,13 @@ inline void draw_ui() {
   }
 }
 #else
-inline void draw_ui() {
+static inline void draw_ui() {
   // Do nothing, it should be inlined/removed by the optimisation phase (hopefully)
 }
 #endif
 
 
-void __not_in_flash_func(handleMIDI)() {
+void __not_in_flash_func(handle_MIDI)() {
   static uint8_t running_status = 0;
   static uint8_t data_bytes[2] = { 0 };
   static uint8_t data_idx = 0;
@@ -752,18 +763,16 @@ void __not_in_flash_func(handleMIDI)() {
       case 7: runtime_state.master_volume = cc_value / 127.f; break;
       case 8: runtime_state.engine_idx = map(cc_value, 0, 127, 0, NUM_ENGINES - 1); break;
       case 9:  // Timbre
-        if (runtime_state.midi_mod) {
-          runtime_state.timbre_in = cc_value / 127.f;
-          runtime_state.timbre_locked = true;
-          runtime_state.last_midi_lock_time = millis();
-        }
+        runtime_state.timbre_in = cc_value / 127.f;
+        runtime_state.filter_midi_owned = true;
+        runtime_state.timbre_locked = true;
+        runtime_state.last_midi_lock_time = millis();
         break;
       case 10:  // Color
-        if (runtime_state.midi_mod) {
-          runtime_state.color_in = cc_value / 127.f;
-          runtime_state.color_locked = true;
-          runtime_state.last_midi_lock_time = millis();
-        }
+        runtime_state.color_in = cc_value / 127.f;
+        runtime_state.filter_midi_owned = true;
+        runtime_state.color_locked = true;
+        runtime_state.last_midi_lock_time = millis();
         break;
       case 11: runtime_state.env_attack_s = 0.01f + (cc_value / 127.f) * 2.f; break;
       case 12: runtime_state.env_release_s = 0.01f + (cc_value / 127.f) * 3.f; break;
@@ -780,6 +789,7 @@ void __not_in_flash_func(handleMIDI)() {
       case 17: runtime_state.color_mod_midi = cc_value / 127.f; break;
       case 127:
         if (cc_value == 127) reset_usb_boot(0, 0);
+        if (cc_value == 126) watchdog_reboot(0, 0, 0);
         break;
     }
     SET_ENGINE_REFRESH_UPDATE;
@@ -789,7 +799,7 @@ void __not_in_flash_func(handleMIDI)() {
 
 
 // Saving settings
-void saveSettings() {
+void saveSettings(RuntimeState *runtime_state) {
   // 1. FAST COMPARISON: Check if memory blocks are identical
   if (memcmp(&settings, &lastSavedSettings, sizeof(SynthSettings)) == 0) {
     return;  // Exit: No changes = no click, no flash wear
@@ -819,8 +829,8 @@ void saveSettings() {
 
   if (serializeJson(doc, f) != 0) {
     lastSavedSettings = settings;
-    runtime_state.show_saved_flag = true;
-    runtime_state.saved_start_time = millis();
+    runtime_state->show_saved_flag = true;
+    runtime_state->saved_start_time = millis();
   }
   f.close();
 }
@@ -899,7 +909,7 @@ void checkSavedFeedback() {
 #endif
 
 
-void saveButton() {
+static inline void handle_save(RuntimeState *runtime_state) {
   int btn = digitalRead(ENCODER_SW);
   static int last_btn_state = HIGH;
   static unsigned long button_press_start = 0;
@@ -913,22 +923,22 @@ void saveButton() {
   if (btn == LOW && !has_saved_this_press) {
     if (millis() - button_press_start >= LONG_PRESS_MS) {
       // Update struct with current live values
-      settings.master_volume = runtime_state.master_volume;
-      settings.env_attack_s = runtime_state.env_attack_s;
-      settings.env_release_s = runtime_state.env_release_s;
-      settings.engine_idx = runtime_state.engine_idx;
-      settings.filter_enabled = runtime_state.filter_enabled;
-      settings.midi_mod = runtime_state.midi_mod;
-      settings.cv_mod1 = runtime_state.cv_mod1;
-      settings.cv_mod2 = runtime_state.cv_mod2;
-      settings.timbre_in = runtime_state.timbre_in;
-      settings.color_in = runtime_state.color_in;
-      settings.timb_mod_cv = runtime_state.timb_mod_cv;
-      settings.color_mod_cv = runtime_state.color_mod_cv;
-      settings.midi_ch = runtime_state.midi_ch;
-      settings.oscilloscope_enabled = runtime_state.oscilloscope_enabled;
+      settings.master_volume = runtime_state->master_volume;
+      settings.env_attack_s = runtime_state->env_attack_s;
+      settings.env_release_s = runtime_state->env_release_s;
+      settings.engine_idx = runtime_state->engine_idx;
+      settings.filter_enabled = runtime_state->filter_enabled;
+      settings.midi_mod = runtime_state->midi_mod;
+      settings.cv_mod1 = runtime_state->cv_mod1;
+      settings.cv_mod2 = runtime_state->cv_mod2;
+      settings.timbre_in = runtime_state->timbre_in;
+      settings.color_in = runtime_state->color_in;
+      settings.timb_mod_cv = runtime_state->timb_mod_cv;
+      settings.color_mod_cv = runtime_state->color_mod_cv;
+      settings.midi_ch = runtime_state->midi_ch;
+      settings.oscilloscope_enabled = runtime_state->oscilloscope_enabled;
 
-      saveSettings();  // This now ONLY clicks if data changed
+      saveSettings(runtime_state);  // This now ONLY clicks if data changed
       has_saved_this_press = true;
     }
   }
@@ -937,8 +947,238 @@ void saveButton() {
     has_saved_this_press = false;
   }
   last_btn_state = btn;
+
+#if USE_SCREEN
+  checkSavedFeedback();
+#endif
 }
 
+
+void handle_control(RuntimeState *runtime_state) {
+  static float smoothT = 0.5f;
+  static float smoothC = 0.5f;
+  static float smoothTMod = 0.0f;
+  static float smoothCMod = 0.0f;
+  static float smoothCut = 0.5f;
+  static float smoothRes = 0.25f;
+  static unsigned long last_pot_read = 0;
+
+  if (millis() - last_pot_read > 4) {
+    last_pot_read = millis();
+
+    float rT = analogRead(POT_TIMBRE) / 1023.0f;
+    float rC = analogRead(POT_COLOR) / 1023.0f;
+    float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
+#if HAS_A3
+    float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
+#else
+    float srcC = 0.5f;
+#endif
+
+    const float SMOOTH_POT = 0.06f;
+    pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
+    pot_color += (rC - pot_color) * SMOOTH_POT;
+
+    if (pot_timbre > 0.999f) pot_timbre = 1.0f;
+    if (pot_timbre < 0.001f) pot_timbre = 0.0f;
+
+    if (pot_color > 0.999f) pot_color = 1.0f;
+    if (pot_color < 0.001f) pot_color = 0.0f;
+
+    int valT = (int)(pot_timbre * 127.0f + 0.5f);
+    int valC = (int)(pot_color * 127.0f + 0.5f);
+
+    if (!runtime_state->midi_mod) {
+      runtime_state->timbre_locked = false;
+      runtime_state->color_locked = false;
+      ENGINE_UPDATED;
+    }
+
+    if (runtime_state->cv_mod1) {
+
+      // --- Smooth the potentiometer inputs (depth controls) ---
+      smoothT += (rT - smoothT) * 0.15f;
+      smoothC += (rC - smoothC) * 0.15f;
+
+      // --- Smooth the modulation sources ---
+      smoothTMod += (srcT - smoothTMod) * 0.1f;  // slower smoothing
+      smoothCMod += (srcC - smoothCMod) * 0.1f;
+
+      // --- Apply modulation depth with soft scaling ---
+      runtime_state->timb_mod_cv += ((smoothT * smoothTMod) - runtime_state->timb_mod_cv) * 0.05f;
+      runtime_state->color_mod_cv += ((smoothC * smoothCMod) - runtime_state->color_mod_cv) * 0.05f;
+
+      // --- Set base values for other modes ---
+      runtime_state->timbre_in = 0.5f;
+      runtime_state->color_in = 0.5f;
+      ENGINE_UPDATED;
+
+    } else if (runtime_state->midi_mod) {
+      smoothT += (rT - smoothT) * 0.15f;
+      smoothC += (rC - smoothC) * 0.15f;
+
+      // TIMBRE
+      if (runtime_state->timbre_locked) {
+        // catchup!
+        // if (fabsf(smoothT - runtime_state->timbre_in) < 0.02f) {
+        //   runtime_state->timbre_locked = false;
+        // }
+        // raw!
+        static uint8_t last_pot_timbre = 0;
+        uint8_t new_timbre = (uint8_t)(smoothT * 127.0f);
+        if (new_timbre != last_pot_timbre) {
+          runtime_state->timbre_locked = false;
+          last_pot_timbre = new_timbre;
+        }
+      }
+      if (!runtime_state->timbre_locked) {
+        runtime_state->timbre_in = smoothT;
+      }
+
+      // COLOR
+      if (runtime_state->color_locked) {
+        // catchup!
+        // if (fabsf(smoothC - runtime_state->color_in) < 0.02f) {
+        //   runtime_state->color_locked = false;
+        // }
+        // raw!
+        static uint8_t last_pot_color = 0;
+        uint8_t new_color = (uint8_t)(smoothC * 127.0f);
+        if (new_color != last_pot_color) {
+          runtime_state->color_locked = false;
+          last_pot_color = new_color;
+        }
+      }
+      if (!runtime_state->color_locked) {
+        runtime_state->color_in = smoothC;
+      }
+      ENGINE_UPDATED;
+    }
+
+    if (runtime_state->filter_enabled) {
+      // --- Update filter CVs from modulation pots ---
+      smoothCut += (srcT - smoothCut) * 0.1f;
+      smoothRes += (srcC - smoothRes) * 0.1f;
+
+      static uint8_t last_pot_cut = 0;
+      static uint8_t last_pot_res = 0;
+      uint8_t new_cut = (uint8_t)(smoothCut * 127.0f);
+      if (new_cut != last_pot_cut) {
+        runtime_state->filter_cutoff_cc = new_cut;
+        runtime_state->filter_midi_owned = false;
+        last_pot_cut = new_cut;
+      }
+      uint8_t new_res = (uint8_t)(smoothRes * 127.0f);
+      if (new_res != last_pot_res) {
+        runtime_state->filter_resonance_cc = new_res;
+        runtime_state->filter_midi_owned = false;
+        last_pot_res = new_res;
+      }
+
+      // --- Keep Timbre and Color pots working as default ---
+      smoothT += (rT - smoothT) * 0.08f;
+      smoothC += (rC - smoothC) * 0.08f;
+
+      // runtime_state->timbre_in = smoothT;
+      // runtime_state->color_in = smoothC;
+
+      // --- Decay any modulation CV influence smoothly ---
+      // runtime_state->timb_mod_cv *= 0.9f;
+      // runtime_state->color_mod_cv *= 0.9f;
+
+      // --- FM is inactive in filter mode ---  <-- not sure why
+      // fm_target = 0.0f;
+      ENGINE_UPDATED;
+    }
+
+    else if (runtime_state->cv_mod2) {
+      smoothT += (rT - smoothT) * 0.08f;
+      smoothC += (rC - smoothC) * 0.08f;
+      runtime_state->timbre_in = smoothT;
+      runtime_state->color_in = smoothC;
+
+      // --- 2. Rolling Average Filter ---
+      static float historyT[16];
+      static float historyC[16];
+      static int histIdx = 0;
+
+      historyT[histIdx] = srcT;
+      historyC[histIdx] = srcC;
+      histIdx = (histIdx + 1) % 16;
+
+      float avgT = 0, avgC = 0;
+      for (int i = 0; i < 16; i++) {
+        avgT += historyT[i];
+        avgC += historyC[i];
+      }
+      avgT /= 16.0f;
+      avgC /= 16.0f;
+
+      smoothTMod += (avgT - smoothTMod) * 0.05f;
+      smoothCMod += (avgC - smoothCMod) * 0.05f;
+
+      // --- 3. Strict Deadzone ---
+      const float CV_DEADZONE = 0.15f;
+      bool cvT_active = (smoothTMod > CV_DEADZONE);
+      bool cvC_active = (smoothCMod > CV_DEADZONE);
+
+      // --- 4. Large-Band Hysteresis for Engines ---
+      static float lockT = -1.0f;
+      const float ENG_HYST = 0.10f;
+
+      if (cvT_active) {
+        if (fabsf(smoothTMod - lockT) > ENG_HYST) {
+          float norm = (smoothTMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
+          int new_idx = (int)(norm * (float)NUM_ENGINES);
+          new_idx = constrain(new_idx, 0, NUM_ENGINES - 1);
+
+          if (new_idx != runtime_state->engine_idx) {
+            runtime_state->engine_idx = new_idx;
+            lockT = smoothTMod;
+            ENGINE_UPDATED;
+          }
+        }
+      } else {
+        lockT = -1.0f;
+      }
+
+      // --- 5. Large-Band Hysteresis for FM ---
+      static float lockC = 0.0f;
+      const float FM_HYST = 0.1f;
+
+      if (cvC_active) {
+        if (fabsf(smoothCMod - lockC) > FM_HYST) {
+          float target_fm = (smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
+          runtime_state->fm_mod = constrain(target_fm, 0.0f, 1.0f);
+          lockC = smoothCMod;
+        }
+      } else {
+        runtime_state->fm_mod *= 0.5f;
+        if (runtime_state->fm_mod < 0.01f) {
+          runtime_state->fm_mod = 0.0f;
+          lockC = 0.0f;
+        }
+      }
+
+      runtime_state->timbre_locked = false;
+      runtime_state->color_locked = false;
+    } else if (!runtime_state->midi_mod) {
+      smoothT += (rT - smoothT) * 0.08f;
+      smoothC += (rC - smoothC) * 0.08f;
+      runtime_state->timbre_in = smoothT;
+      runtime_state->color_in = smoothC;
+
+      // Zero out all CV-related variables
+      runtime_state->timb_mod_cv = 0.0f;
+      runtime_state->color_mod_cv = 0.0f;
+      runtime_state->fm_mod = 0.0f;
+
+      runtime_state->timbre_locked = false;
+      runtime_state->color_locked = false;
+      ENGINE_UPDATED;
+    }
+  }
+}
 
 void handle_menu(Encoder *encoder, RuntimeState *runtime_state) {
   const int8_t step = encoder_decode_step(encoder);
@@ -1042,77 +1282,33 @@ void handle_menu(Encoder *encoder, RuntimeState *runtime_state) {
   draw_ui();
 }
 
-void setup() {
-  // Serial.begin(115200);
-  bool fs_ready = false;
-  LittleFS.format();
-  if (!LittleFS.begin()) {
-    //  Serial.println("LittleFS Mount Failed. Attempting to format...");
-    LittleFS.format();
-    if (LittleFS.begin()) {
-      //    Serial.println("LittleFS Formatted and Mounted successfully.");
-      fs_ready = true;
-    } else {
-      //   Serial.println("LittleFS Critical Error: Hardware issue or Flash size not set!");
-    }
-  } else {
-    //  Serial.println("LittleFS Mounted.");
-    fs_ready = true;
-  }
+//===============================
+// Setup and main loop for Core0
+//===============================
+#if DEBUG
+static inline void setup_debug_serial() {
+  Serial.begin(115200);
+}
+#endif
 
-  TinyUSBDevice.setManufacturerDescriptor("ledlaux");
-  TinyUSBDevice.setProductDescriptor("Vija Synth");
-  TinyUSBDevice.setSerialDescriptor("NLYHW_00");
+static inline void setup_serial() {
+  Serial1.setRX(MIDI_UART_RX);
+  Serial1.begin(31250);
+}
 
-  usb_midi.begin();
-  i2s_output.setFrequency(SAMPLE_RATE);
-  i2s_output.setDATA(I2S_DATA_PIN);
-  i2s_output.setBCLK(I2S_BCLK_PIN);
-  i2s_output.begin();
+static inline void setup_pins() {
+  pinMode(ENCODER_CLK, INPUT_PULLUP);
+  pinMode(ENCODER_DT, INPUT_PULLUP);
+  pinMode(ENCODER_SW, INPUT_PULLUP);
+}
 
-  for (int v = 0; v < MAX_VOICES; v++) {
-    voices[v].osc.Init(SAMPLE_RATE);
-    voices[v].active = false;
-  }
-
-  global_filter.Init();
-  global_filter.set_mode(braids::SVF_MODE_LP);
-  uint16_t init_cutoff = 32767 / 4;
-  uint16_t init_res = 32767 / 2;
-
-  global_filter.set_frequency(init_cutoff);
-  global_filter.set_resonance(init_res);
-
+#if USE_SCREEN
+static inline void setup_display() {
   Wire.setSDA(OLED_SDA);
   Wire.setSCL(OLED_SCL);
   Wire.begin();
   Wire.setClock(400000);
-  load_settings();
-}
 
-
-void loop() {
-
-  if (!runtime_state.system_ready) {
-    yield();  // Wait for Core 1 to finish the splash
-    return;
-  }
-
-  if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
-    updateAudio();
-  }
-  handleMIDI();
-}
-
-
-void setup1() {
-  Serial1.setRX(MIDI_UART_RX);
-  Serial1.begin(31250);
-  pinMode(ENCODER_CLK, INPUT_PULLUP);
-  pinMode(ENCODER_DT, INPUT_PULLUP);
-  pinMode(ENCODER_SW, INPUT_PULLUP);
-
-#if USE_SCREEN
 #if SSD1306
   display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
 #endif
@@ -1123,233 +1319,107 @@ void setup1() {
   delay(4000);
   display.clearDisplay();
   display.display();
+}
 #endif
 
-  runtime_state.system_ready = true;
+static inline void setup_USB() {
+  TinyUSBDevice.setManufacturerDescriptor("ledlaux");
+  TinyUSBDevice.setProductDescriptor("Vija Synth");
+  TinyUSBDevice.setSerialDescriptor("NLYHW_00");
+
+  usb_midi.begin();
 }
 
-
-void loop1() {
-  saveButton();
-#if USE_SCREEN
-  checkSavedFeedback();
-#endif
-
-  static float smoothT = 0.5f;
-  static float smoothC = 0.5f;
-  static float smoothTMod = 0.0f;
-  static float smoothCMod = 0.0f;
-  static float smoothCut = 0.5f;
-  static float smoothRes = 0.25f;
-  static unsigned long last_pot_read = 0;
-
-  if (millis() - last_pot_read > 4) {
-    last_pot_read = millis();
-
-    float rT = analogRead(POT_TIMBRE) / 1023.0f;
-    float rC = analogRead(POT_COLOR) / 1023.0f;
-    float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
-    #if HAS_A3
-    float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
-    #else
-    float srcC = 0.5f;
-    #endif
-
-    const float SMOOTH_POT = 0.06f;
-    pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
-    pot_color += (rC - pot_color) * SMOOTH_POT;
-
-    if (pot_timbre > 0.999f) pot_timbre = 1.0f;
-    if (pot_timbre < 0.001f) pot_timbre = 0.0f;
-
-    if (pot_color > 0.999f) pot_color = 1.0f;
-    if (pot_color < 0.001f) pot_color = 0.0f;
-
-    int valT = (int)(pot_timbre * 127.0f + 0.5f);
-    int valC = (int)(pot_color * 127.0f + 0.5f);
-
-    if (!runtime_state.midi_mod) {
-      runtime_state.timbre_locked = false;
-      runtime_state.color_locked = false;
-      SET_ENGINE_REFRESH_UPDATE;
-    }
-
-    if (runtime_state.cv_mod1) {
-
-      // --- Smooth the potentiometer inputs (depth controls) ---
-      smoothT += (rT - smoothT) * 0.15f;
-      smoothC += (rC - smoothC) * 0.15f;
-
-      // --- Smooth the modulation sources ---
-      smoothTMod += (srcT - smoothTMod) * 0.1f;  // slower smoothing
-      smoothCMod += (srcC - smoothCMod) * 0.1f;
-
-      // --- Apply modulation depth with soft scaling ---
-      runtime_state.timb_mod_cv += ((smoothT * smoothTMod) - runtime_state.timb_mod_cv) * 0.05f;
-      runtime_state.color_mod_cv += ((smoothC * smoothCMod) - runtime_state.color_mod_cv) * 0.05f;
-
-      // --- Set base values for other modes ---
-      runtime_state.timbre_in = 0.5f;
-      runtime_state.color_in = 0.5f;
-      SET_ENGINE_REFRESH_UPDATE;
-
-    } else if (runtime_state.midi_mod) {
-
-      // -------- TIMBRE --------
-      if (runtime_state.timbre_locked) {
-        if (fabsf(rT - runtime_state.timbre_in) < 0.01f) {
-          runtime_state.timbre_locked = false;
-          smoothT = rT;
-        }
-      }
-
-      if (!runtime_state.timbre_locked) {
-        smoothT += (rT - smoothT) * 0.15f;
-        runtime_state.timbre_in = smoothT;
-      }
-
-      // -------- COLOR --------
-      if (runtime_state.color_locked) {
-        if (fabsf(rC - runtime_state.color_in) < 0.01f) {
-          runtime_state.color_locked = false;
-          smoothC = rC;
-        }
-      }
-
-      if (!runtime_state.color_locked) {
-        smoothC += (rC - smoothC) * 0.15f;
-        runtime_state.color_in = smoothC;
-      }
-
-      SET_ENGINE_REFRESH_UPDATE;
-    }
-
-    if (runtime_state.filter_enabled) {
-      // --- Update filter CVs from modulation pots ---
-      smoothCut += (srcT - smoothCut) * 0.1f;
-      smoothRes += (srcC - smoothRes) * 0.1f;
-
-      static uint8_t last_pot_cut = 0;
-      static uint8_t last_pot_res = 0;
-      uint8_t new_cut = (uint8_t)(smoothCut * 127.0f);
-      if (new_cut != last_pot_cut) {
-        runtime_state.filter_cutoff_cc = new_cut;
-        runtime_state.filter_midi_owned = false;
-        last_pot_cut = new_cut;
-      }
-      uint8_t new_res = (uint8_t)(smoothRes * 127.0f);
-      if (new_res != last_pot_res) {
-        runtime_state.filter_resonance_cc = new_res;
-        runtime_state.filter_midi_owned = false;
-        last_pot_res = new_res;
-      }
-
-      // --- Keep Timbre and Color pots working as default ---
-      smoothT += (rT - smoothT) * 0.08f;
-      smoothC += (rC - smoothC) * 0.08f;
-
-      runtime_state.timbre_in = smoothT;
-      runtime_state.color_in = smoothC;
-
-      // --- Decay any modulation CV influence smoothly ---
-      runtime_state.timb_mod_cv *= 0.9f;
-      runtime_state.color_mod_cv *= 0.9f;
-
-      // --- FM is inactive in filter mode ---  <-- not sure why
-      // fm_target = 0.0f;
-      SET_ENGINE_REFRESH_UPDATE;
-    }
-
-    else if (runtime_state.cv_mod2) {
-      smoothT += (rT - smoothT) * 0.08f;
-      smoothC += (rC - smoothC) * 0.08f;
-      runtime_state.timbre_in = smoothT;
-      runtime_state.color_in = smoothC;
-
-      // --- 2. Rolling Average Filter ---
-      static float historyT[16];
-      static float historyC[16];
-      static int histIdx = 0;
-
-      historyT[histIdx] = srcT;
-      historyC[histIdx] = srcC;
-      histIdx = (histIdx + 1) % 16;
-
-      float avgT = 0, avgC = 0;
-      for (int i = 0; i < 16; i++) {
-        avgT += historyT[i];
-        avgC += historyC[i];
-      }
-      avgT /= 16.0f;
-      avgC /= 16.0f;
-
-      smoothTMod += (avgT - smoothTMod) * 0.05f;
-      smoothCMod += (avgC - smoothCMod) * 0.05f;
-
-      // --- 3. Strict Deadzone ---
-      const float CV_DEADZONE = 0.15f;
-      bool cvT_active = (smoothTMod > CV_DEADZONE);
-      bool cvC_active = (smoothCMod > CV_DEADZONE);
-
-      // --- 4. Large-Band Hysteresis for Engines ---
-      static float lockT = -1.0f;
-      const float ENG_HYST = 0.10f;
-
-      if (cvT_active) {
-        if (fabsf(smoothTMod - lockT) > ENG_HYST) {
-          float norm = (smoothTMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          int new_idx = (int)(norm * (float)NUM_ENGINES);
-          new_idx = constrain(new_idx, 0, NUM_ENGINES - 1);
-
-          if (new_idx != runtime_state.engine_idx) {
-            runtime_state.engine_idx = new_idx;
-            lockT = smoothTMod;
-            SET_ENGINE_REFRESH_UPDATE;
-          }
-        }
-      } else {
-        lockT = -1.0f;
-      }
-
-      // --- 5. Large-Band Hysteresis for FM ---
-      static float lockC = 0.0f;
-      const float FM_HYST = 0.1f;
-
-      if (cvC_active) {
-        if (fabsf(smoothCMod - lockC) > FM_HYST) {
-          float target_fm = (smoothCMod - CV_DEADZONE) / (1.0f - CV_DEADZONE);
-          runtime_state.fm_mod = constrain(target_fm, 0.0f, 1.0f);
-          lockC = smoothCMod;
-        }
-      } else {
-        runtime_state.fm_mod *= 0.5f;
-        if (runtime_state.fm_mod < 0.01f) {
-          runtime_state.fm_mod = 0.0f;
-          lockC = 0.0f;
-        }
-      }
-
-      runtime_state.timbre_locked = false;
-      runtime_state.color_locked = false;
+static inline bool setup_LittleFS() {
+  bool fs_ready = false;
+  LittleFS.format();
+  if (!LittleFS.begin()) {
+    DEBUG_PRINTLN("LittleFS Mount Failed. Attempting to format...");
+    LittleFS.format();
+    if (LittleFS.begin()) {
+      DEBUG_PRINTLN("LittleFS Formatted and Mounted successfully.");
+      return true;
     } else {
-      smoothT += (rT - smoothT) * 0.08f;
-      smoothC += (rC - smoothC) * 0.08f;
-      runtime_state.timbre_in = smoothT;
-      runtime_state.color_in = smoothC;
-
-      // Zero out all CV-related variables
-      runtime_state.timb_mod_cv = 0.0f;
-      runtime_state.color_mod_cv = 0.0f;
-      runtime_state.fm_mod = 0.0f;
-
-      runtime_state.timbre_locked = false;
-      runtime_state.color_locked = false;
-      SET_ENGINE_REFRESH_UPDATE;
+      DEBUG_PRINTLN("LittleFS Critical Error: Hardware issue or Flash size not set!");
+      return false;
     }
   }
+  DEBUG_PRINTLN("LittleFS Mounted.");
+  return true;
+}
+
+void setup() {
+#if DEBUG
+  setup_debug_serial();
+#endif
+  setup_LittleFS();
+  setup_USB();
+  setup_serial();
+  setup_pins();
+#if USE_SCREEN
+  setup_display();
+#endif
+  load_settings();
+
+  SET_SYSTEM_READY();
+}
+
+void loop() {
+  if (!runtime_state.system_ready) {
+    yield();  // Wait for Core 1 to finish DSP initialisation
+    return;
+  }
+
+  // Deal with save + save display (if a screen exists)
+  handle_save(&runtime_state);
+
+  // Deal with pots/controls/CV
+  handle_control(&runtime_state);
 
   // Deal with encoder menu/states
   handle_menu(&encoder, &runtime_state);
 
+  // Deal with MIDI
+  handle_MIDI();
+
   yield();
+}
+
+//===============================
+// Setup and main loop for Core1
+//===============================
+
+static inline void setup_soundcard() {
+  i2s_output.setFrequency(SAMPLE_RATE);
+  i2s_output.setDATA(I2S_DATA_PIN);
+  i2s_output.setBCLK(I2S_BCLK_PIN);
+  i2s_output.begin();
+}
+
+static inline void setup_voices() {
+  for (int v = 0; v < MAX_VOICES; v++) {
+    voices[v].osc.Init(SAMPLE_RATE);
+    voices[v].active = false;
+  }
+}
+
+static inline void setup_global_filter() {
+  global_filter.Init();
+  global_filter.set_mode(braids::SVF_MODE_LP);
+  global_filter.set_frequency(INIT_CUTOFF);
+  global_filter.set_resonance(INIT_RESONANCE);
+}
+
+void setup1() {
+  setup_soundcard();
+  setup_voices();
+  setup_global_filter();
+}
+
+void loop1() {
+  if (i2s_output.availableForWrite() >= AUDIO_BLOCK * 4) {
+    updateAudio();
+  }
+
+  SET_SYSTEM_READY();
 }
