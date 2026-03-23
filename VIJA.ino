@@ -77,6 +77,7 @@
 #define POT_COLOR A1       // GPIO27
 #define POT_TIMBRE_MOD A2  // GPIO28
 #define POT_COLOR_MOD A3   // GPIO29
+#define HAS_A3 0  // RPI Pico W doen't have GPIO29
 
 #define ENCODER_CLK 2
 #define ENCODER_DT 3
@@ -99,7 +100,7 @@
 
 // MIDI stuffs
 #define IS_MIDI_NOTE_OFF(status, value) (((status & 0xF0) == 0x80) || ((status & 0xF0) == 0x90 && value == 0))
-#define IS_MIDI_NOTE_ON(status) (status & 0xF0)
+#define IS_MIDI_NOTE_ON(status) ((status & 0xF0) == 0x90)
 #define IS_MIDI_CC(status) ((status & 0xF0) == 0xB0)
 
 
@@ -301,13 +302,12 @@ static RuntimeState runtime_state = {
   .display_mode = ENGINE_SELECT_MODE,
   .enc_mode = ENGINE_SELECT,
 
-  .system_ready = false
+  .system_ready = false,
 #if USE_SCREEN
-  ,
   .last_engine_draw = -1,
   .last_draw_time = 0,
   .scope_buffer = { 0 },
-  .scope_ready = false
+  .scope_ready = false,
 #endif
 };
 #define SET_ENGINE_REFRESH_UPDATE runtime_state.engine_updated = true
@@ -326,7 +326,6 @@ Adafruit_USBD_MIDI usb_midi;
 SynthSettings lastSavedSettings;  // Settings copy for comparison of changes
 
 #if USE_SCREEN
-
 #if SSD1306
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 #endif
@@ -334,7 +333,6 @@ Adafruit_SSD1306 display(128, 64, &Wire, -1);
 #if SH110X
 Adafruit_SH1106G display = Adafruit_SH1106G(128, 64, &Wire, -1);
 #endif
-
 #endif
 
 const char *const engine_names[] = {
@@ -603,8 +601,8 @@ void draw_engine_ui() {
   display.display();
 }
 
-void drawSplash() {
 
+void drawSplash() {
   display.clearDisplay();
   display.drawBitmap((128 - 32) / 2, 0, waveform_bitmap, 32, 16, SSD1306_WHITE);
   const char *title = "VIJA";
@@ -941,6 +939,7 @@ void saveButton() {
   last_btn_state = btn;
 }
 
+
 void handle_menu(Encoder *encoder, RuntimeState *runtime_state) {
   const int8_t step = encoder_decode_step(encoder);
   if (step) {
@@ -1150,7 +1149,11 @@ void loop1() {
     float rT = analogRead(POT_TIMBRE) / 1023.0f;
     float rC = analogRead(POT_COLOR) / 1023.0f;
     float srcT = analogRead(POT_TIMBRE_MOD) / 1023.0f;
+    #if HAS_A3
     float srcC = analogRead(POT_COLOR_MOD) / 1023.0f;
+    #else
+    float srcC = 0.5f;
+    #endif
 
     const float SMOOTH_POT = 0.06f;
     pot_timbre += (rT - pot_timbre) * SMOOTH_POT;
@@ -1165,13 +1168,11 @@ void loop1() {
     int valT = (int)(pot_timbre * 127.0f + 0.5f);
     int valC = (int)(pot_color * 127.0f + 0.5f);
 
-
     if (!runtime_state.midi_mod) {
       runtime_state.timbre_locked = false;
       runtime_state.color_locked = false;
       SET_ENGINE_REFRESH_UPDATE;
     }
-
 
     if (runtime_state.cv_mod1) {
 
@@ -1192,9 +1193,7 @@ void loop1() {
       runtime_state.color_in = 0.5f;
       SET_ENGINE_REFRESH_UPDATE;
 
-    }
-
-    else if (runtime_state.midi_mod) {
+    } else if (runtime_state.midi_mod) {
 
       // -------- TIMBRE --------
       if (runtime_state.timbre_locked) {
